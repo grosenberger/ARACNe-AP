@@ -15,17 +15,18 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Random;
 
+import common.DataMatrix;
 import common.DataParser;
+import common.DataVector;
 import common.ExpressionMatrix;
 
 
-public class Aracne {
+public class hpAracne{
 	// Variable definition
 	static NumberFormat formatter = new DecimalFormat("0.###E0");
 	static float simCut = 0; // In the original paper this was a parameter. E.g. if two TFs have a very high MI, DPI is not calculated
-	final static int geneNumberInMIthresholding = 3000;
+	final static int geneNumberInMIthresholding = 1000;
 	static Random random = new Random();
-	private static boolean singlemode = false;
 
 	// Main Method
 	public static void main(String[] args) throws Exception {
@@ -33,8 +34,7 @@ public class Aracne {
 
 		//// Parse arguments
 		CmdLineParser parser = new CmdLineParser();
-		CmdLineParser.Option optionExpressionFile1 = parser.addStringOption('e', "expfile_upstream");
-		CmdLineParser.Option optionExpressionFile2 = parser.addStringOption('d', "expfile_downstream");
+		CmdLineParser.Option optionExpressionFile = parser.addStringOption('e', "expfile");
 		CmdLineParser.Option optionTranscriptionFactorsFile = parser.addStringOption('t', "tfs");
 		CmdLineParser.Option optionOutputFolder = parser.addStringOption('o', "output");
 		CmdLineParser.Option optionConsolidate = parser.addBooleanOption('c',"consolidate");
@@ -97,7 +97,7 @@ public class Aracne {
 		// You can consolidate bootstraps
 
 		if(isThreshold){
-			File expressionFile = new File((String)parser.getOptionValue(optionExpressionFile1));
+			File expressionFile = new File((String)parser.getOptionValue(optionExpressionFile));
 			outputFolder.mkdir();
 			Double miPvalue = new Double((Double) parser.getOptionValue(optionPvalue));
 			Integer seed = (Integer)parser.getOptionValue(optionSeed);
@@ -109,19 +109,11 @@ public class Aracne {
 			runThreshold(expressionFile,outputFolder,miPvalue,seed);
 		}
 		else if(!isConsolidate){
-			String exp1File = (String)parser.getOptionValue(optionExpressionFile1);
-			File expressionFile1 = new File(exp1File);
-			String exp2File = (String)parser.getOptionValue(optionExpressionFile2);
+			String expFile = (String)parser.getOptionValue(optionExpressionFile);
+			File expressionFile = new File(expFile);
 			File transcriptionFactorsFile = new File((String)parser.getOptionValue(optionTranscriptionFactorsFile));
 			Integer seed = (Integer)parser.getOptionValue(optionSeed);
 			Integer threadCount = (Integer)parser.getOptionValue(optionThreaded);
-
-			if(exp2File == null){
-				exp2File = exp1File;
-				singlemode  = true;
-			}
-
-			File expressionFile2 = new File(exp2File);
 
 			if(threadCount == null){
 				threadCount = 1;
@@ -135,14 +127,12 @@ public class Aracne {
 			String processId = new BigInteger(130, random).toString(32);
 			Double miPvalue = new Double((Double) parser.getOptionValue(optionPvalue));
 			runAracne(
-					expressionFile1,
-					expressionFile2,
+					expressionFile,
 					transcriptionFactorsFile,
 					outputFolder,
 					processId,
 					miPvalue,
 					threadCount,
-					singlemode,
 					noDPI,
 					nobootstrap
 					);
@@ -153,90 +143,56 @@ public class Aracne {
 
 
 	// Calculate Threshold mode
-	private static void runThreshold(File _expressionFile, File _outputFolder, double miPvalue, int seed) throws NumberFormatException, Exception{
+	private static void runThreshold(File _expressionFile, File _outputFolder, double _miPvalue, int _seed) throws NumberFormatException, Exception{
 		// Read expression matrix and transcription factor lists
-		ExpressionMatrix em = new ExpressionMatrix(_expressionFile);
-
-		// Rank transformation through an external Normalization class
-		HashMap<String, short[]> rankData = em.rank(random);
-
+		DataMatrix em = new DataMatrix(_expressionFile);
+		HashMap<String, DataVector> data = em.data;
+		
 		// Check if the sample size
-		int sampleNumber = rankData.get(rankData.keySet().toArray()[0]).length;
+		int sampleNumber = em.samples.size();
 		if(sampleNumber>32767){
 			System.err.println("Warning: sample number is higher than the short data limit");
 			System.exit(1);
 		}
-
+		
 		//// Calculate threshold for the required p-value
 		// Don't if a threshold file already exists
-		File miThresholdFile = new File(_outputFolder+"/miThreshold_p"+formatter.format(miPvalue)+"_samples"+sampleNumber+".txt");
+		File miThresholdFile = new File(_outputFolder+"/miThreshold_p"+formatter.format(_miPvalue)+"_samples"+sampleNumber+".txt");
 		double miThreshold;
 
 		if(miThresholdFile.exists()){
 			System.out.println("MI threshold file was already there, but I am recalculating it.");
 		}
-		MI miCPU = new MI(rankData);
-		miThreshold = miCPU.calibrateMIThreshold(sampleNumber,geneNumberInMIthresholding,miPvalue,seed);
+		MI miCPU = new MI(em);
+		
+		miThreshold = miCPU.calibrateMIThresholdNA(data,geneNumberInMIthresholding,_miPvalue,_seed);
 		DataParser.writeValue(miThreshold, miThresholdFile);
 	}
 
 	// Single run mode
 	private static void runAracne(
-			File expressionFile1,
-			File expressionFile2,
+			File expressionFile,
 			File transcriptionFactorsFile,
 			File outputFolder, 
 			String processId,
 			Double miPvalue,
 			Integer threadCount,
-			boolean singlemode, // Only one expression matrix was provided
 			boolean noDPI, // Do not use DPI
 			boolean nobootstrap // Do not use bootstrap
 			) throws NumberFormatException, Exception {
 		long initialTime = System.currentTimeMillis();
 		// Read expression matrices 
-		ExpressionMatrix em1 = new ExpressionMatrix(expressionFile1);
-		ExpressionMatrix em2;
-		if(singlemode){
-			em2 = em1;
-		} else {
-			em2 = new ExpressionMatrix(expressionFile2);
-		}
-		
-		HashMap<String, short[]> rankData1;
-		HashMap<String, short[]> rankData2;
-
-		
-		
+		DataMatrix dm = new DataMatrix(expressionFile);
 		
 		// Don't bootstrap them
-		if(nobootstrap){
-			rankData1 = em1.rank(random);
-			rankData2 = em2.rank(random);
+		if(!nobootstrap){
+			System.out.println("Bootstrapping input matrix 1 with "+dm.getGenes().size()+" genes and "+dm.getSamples().size()+" samples");
+			dm.bootstrap(random);
 		}
-			
-		// Or Bootstrap them
-		else {
-			System.out.println("Bootstrapping input matrix 1 with "+em1.getGenes().size()+" genes and "+em1.getSamples().size()+" samples");
-			ExpressionMatrix bootstrapped1 = em1.bootstrap(random);
-			ExpressionMatrix bootstrapped2;
-			if(!singlemode){
-				System.out.println("Bootstrapping input matrix 2 with "+em2.getGenes().size()+" genes and "+em2.getSamples().size()+" samples");
-				if(em2.getSamples().size()!=em1.getSamples().size()){
-					System.err.println("The two input files have different lengths!");
-					System.exit(1);
-				}
-				bootstrapped2 = em2.bootstrap(em1.getBootsamples());
-
-			} else {
-				bootstrapped2 = bootstrapped1;
-			}
-			rankData1 = bootstrapped1.rank(random);
-			rankData2 = bootstrapped2.rank(random);
-		}
+		HashMap<String, DataVector> data = dm.data;
 
 		// Check if the sample size is less than the short limit
-		int sampleNumber = rankData1.get(rankData1.keySet().toArray()[0]).length;
+		int sampleNumber = dm.getSamples().size();
 		if(sampleNumber>32767){
 			System.err.println("Warning: sample number is higher than the short data limit");
 			System.exit(1);
@@ -265,13 +221,9 @@ public class Aracne {
 
 		// Calculate a single ARACNE (using the APAC4 implementation by Alex)
 		long time1 = System.currentTimeMillis();
-		if(singlemode){
-			System.out.println("Calculate network from: "+expressionFile1);
-		} else {
-			System.out.println("Calculate network from: "+expressionFile1+ " and " +expressionFile2);
-		}
+		System.out.println("Calculate network from: "+expressionFile);
 		HashMap<String, HashMap<String, Double>> finalNetwork = new HashMap<String, HashMap<String, Double>>();
-		MI miCPU = new MI(rankData1,rankData2,tfList,miThreshold,threadCount);
+		MI miCPU = new MI(data,tfList,miThreshold,threadCount);
 		finalNetwork = miCPU.getFinalNetwork();
 		System.out.println("Time elapsed for calculating MI: "+(System.currentTimeMillis() - time1)/1000+" sec\n");
 
