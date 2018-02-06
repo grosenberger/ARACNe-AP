@@ -295,6 +295,19 @@ public class ExpressionMatrix {
 		return genes;
 	}
 
+	public int[] getNACountPerGene() {
+		int[] NAs = new int[naBoolean.length];
+		for(int i = 0; i<naBoolean.length; i++){
+			NAs[i] = 0;
+			for(int j = 0; j<naBoolean[i].length; j++){
+				if (naBoolean[i][j]){
+					NAs[i]++;
+				}
+			}
+		}
+		return NAs;
+	}
+
 
 	// This method generates a new expressionMatrix which is a subset of the current object
 	public ExpressionMatrix selectSamples(ArrayList<String> common) {
